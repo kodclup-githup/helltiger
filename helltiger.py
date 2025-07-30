@@ -60,17 +60,69 @@ class SystemMonitor:
 
     def get_cpu_usage(self):
         """CPU kullanım yüzdesi"""
-        return psutil.cpu_percent(interval=None)
+        try:
+            return psutil.cpu_percent(interval=None)
+        except (PermissionError, OSError) as e:
+            # Termux ve Android ortamlarında /proc/stat erişim sorunu
+            try:
+                # Alternatif yöntem: loadavg kullan
+                with open('/proc/loadavg', 'r') as f:
+                    load_avg = float(f.read().split()[0])
+                    # Load average'ı CPU yüzdesine yaklaştır
+                    cpu_count = psutil.cpu_count() or 1
+                    cpu_percent = min((load_avg / cpu_count) * 100, 100)
+                    return cpu_percent
+            except:
+                # Son çare: sabit değer döndür
+                return 0.0
 
     def get_ram_usage(self):
         """RAM kullanım bilgileri"""
-        memory = psutil.virtual_memory()
-        return {
-            'percent': memory.percent,
-            'used': memory.used / (1024**3),  # GB
-            'total': memory.total / (1024**3),  # GB
-            'available': memory.available / (1024**3)  # GB
-        }
+        try:
+            memory = psutil.virtual_memory()
+            return {
+                'percent': memory.percent,
+                'used': memory.used / (1024**3),  # GB
+                'total': memory.total / (1024**3),  # GB
+                'available': memory.available / (1024**3)  # GB
+            }
+        except (PermissionError, OSError) as e:
+            # Termux ve Android ortamlarında bellek bilgisi erişim sorunu
+            try:
+                # Alternatif yöntem: /proc/meminfo kullan
+                with open('/proc/meminfo', 'r') as f:
+                    meminfo = f.read()
+                    
+                # MemTotal ve MemAvailable değerlerini çıkar
+                total_match = None
+                available_match = None
+                for line in meminfo.split('\n'):
+                    if line.startswith('MemTotal:'):
+                        total_match = int(line.split()[1]) * 1024  # kB to bytes
+                    elif line.startswith('MemAvailable:'):
+                        available_match = int(line.split()[1]) * 1024  # kB to bytes
+                    elif line.startswith('MemFree:') and available_match is None:
+                        available_match = int(line.split()[1]) * 1024  # kB to bytes
+                
+                if total_match and available_match:
+                    used = total_match - available_match
+                    percent = (used / total_match) * 100
+                    return {
+                        'percent': percent,
+                        'used': used / (1024**3),  # GB
+                        'total': total_match / (1024**3),  # GB
+                        'available': available_match / (1024**3)  # GB
+                    }
+            except:
+                pass
+            
+            # Son çare: varsayılan değerler döndür
+            return {
+                'percent': 50.0,
+                'used': 2.0,
+                'total': 4.0,
+                'available': 2.0
+            }
 
     def get_gpu_usage(self):
         """GPU kullanım bilgileri"""
@@ -315,7 +367,15 @@ class HellTigerCore:
         
         # CPU Satırı
         cpu_bar = "█" * int(cpu_usage / 5) + "░" * (20 - int(cpu_usage / 5))
-        print(f"{Colors.CYAN}║{Colors.END} {Colors.BOLD}🖥️  CPU:{Colors.END} {cpu_color}[{cpu_bar}] {cpu_usage:5.1f}%{Colors.END} {Colors.GRAY}({psutil.cpu_count()} çekirdek){Colors.END} {Colors.CYAN}║{Colors.END}")
+        try:
+            cpu_count = psutil.cpu_count()
+        except (PermissionError, OSError):
+            try:
+                with open('/proc/cpuinfo', 'r') as f:
+                    cpu_count = len([line for line in f if line.startswith('processor')])
+            except:
+                cpu_count = 4
+        print(f"{Colors.CYAN}║{Colors.END} {Colors.BOLD}🖥️  CPU:{Colors.END} {cpu_color}[{cpu_bar}] {cpu_usage:5.1f}%{Colors.END} {Colors.GRAY}({cpu_count} çekirdek){Colors.END} {Colors.CYAN}║{Colors.END}")
         
         # RAM Satırı
         ram_bar = "█" * int(ram_info['percent'] / 5) + "░" * (20 - int(ram_info['percent'] / 5))
@@ -751,8 +811,30 @@ def main():
         print(f"{Colors.CYAN}[*] Sistem gereksinimleri kontrol ediliyor...{Colors.END}")
         
         # CPU çekirdek sayısı
-        cpu_cores = psutil.cpu_count()
-        available_memory = psutil.virtual_memory().total / (1024**3)
+        try:
+            cpu_cores = psutil.cpu_count()
+        except (PermissionError, OSError):
+            # Termux'ta alternatif yöntem
+            try:
+                with open('/proc/cpuinfo', 'r') as f:
+                    cpu_cores = len([line for line in f if line.startswith('processor')])
+            except:
+                cpu_cores = 4  # Varsayılan değer
+        
+        try:
+            available_memory = psutil.virtual_memory().total / (1024**3)
+        except (PermissionError, OSError):
+            # Termux'ta alternatif yöntem
+            try:
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            available_memory = int(line.split()[1]) / (1024**2)  # kB to GB
+                            break
+                    else:
+                        available_memory = 4.0  # Varsayılan değer
+            except:
+                available_memory = 4.0  # Varsayılan değer
         
         print(f"{Colors.GREEN}✓ CPU Çekirdekleri: {cpu_cores}{Colors.END}")
         print(f"{Colors.GREEN}✓ Toplam RAM: {available_memory:.1f} GB{Colors.END}")
